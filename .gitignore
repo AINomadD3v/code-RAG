@@ -1,0 +1,82 @@
+# Python
+# ------
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+*.egg
+dist/
+build/
+*.so # Shared object files, if any are compiled locally outside of Nix/venv
+
+# CocoIndex specific (if it creates local cache/log files not in .venv)
+# .cocoindex_cache/ # Example, if such a directory is created
+# *.cocoindex_log # Example
+
+# Evaluation output (if you use `cocoindex evaluate`)
+eval_*/
+
+# Environment variables
+.env
+.env.*
+!/.env.example # It's good practice to commit an example env file
+
+# Nix / Direnv
+# ------------
+.direnv/      # Direnv local state
+result        # Common Nix build result symlink
+result-* # Other result symlinks
+
+# Docker
+# -------
+# If you have local data volumes mapped into your project directory (not common with named volumes)
+# e.g., if postgres_data was a local folder:
+# postgres_data/
+
+# IDE / Editor specific
+# ---------------------
+.idea/        # JetBrains IDEs
+.vscode/      # VSCode (consider committing .vscode/settings.json if it's project-specific and useful)
+*.swp
+*.swo
+
+# OS specific
+# -----------
+.DS_Store     # macOS
+Thumbs.db     # Windows
+ehthumbs.db   # Windows
+
+# Large Data / Source Code for Indexing
+# -------------------------------------
+# If the 'uiautomator2' directory is very large and you don't want to commit
+# the raw source code you are indexing (e.g., if it's fetched from elsewhere
+# or is a standard library you've copied in for indexing).
+# If it's your own modified version or essential to the project's state,
+# then DO NOT ignore it.
+# uiautomator2/
+
+# Log files
+# ---------
+*.log
+logs/
+
+# Coverage data
+# -------------
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Other
+# -----
+# Add any other large files or generated directories specific to your workflow.
+# For example, if sentence-transformers downloads models to a specific local path
+# outside .venv (though it usually caches them in ~/.cache/huggingface or similar)
+# .cache/ # Be careful with this, might be too broad
+
