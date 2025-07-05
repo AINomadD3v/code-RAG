@@ -1,0 +1,7 @@
+cocoindex[cocoinsight]==0.1.36
+sentence-transformers
+python-dotenv
+sqlalchemy
+psycopg2-binary
+fastapi[all]
+
