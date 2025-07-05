@@ -1,66 +1,53 @@
-# main.py
-import asyncio
+# RagChunking/main.py
 
-# import datetime # Removed - Not used directly
+import asyncio
 import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Any, List, Optional  # Removed Dict - Not used
+from typing import Any, List, Optional  # Kept for general type hinting
 
-import cocoindex
+import cocoindex  # Main import first
 import uvicorn
 
-# --- Attempt to import types from likely submodules ---
-# If these paths are incorrect, explore cocoindex package or use Any
-try:
-    from cocoindex.flows import DataScope, FlowBuilder
-    from cocoindex.functions import (
-        SentenceTransformerEmbed,  # Built-ins
-        SplitRecursively,
-    )
-    from cocoindex.query import SimpleSemanticsQueryHandler
-    from cocoindex.settings import DatabaseConnectionSpec, Settings  # For init
-    from cocoindex.sources import LocalFile
-    from cocoindex.storages import VectorIndexDef, VectorSimilarityMetric
-    from cocoindex.types import DataSlice
+# --- Basic Logging Configuration ---
+# Placed at the top to be available for all subsequent code
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)  # Use __name__ for module-specific logger
+# ------------------------------------
 
-    MODULE_IMPORTS_FIXED = True
-except ImportError:
-    MODULE_IMPORTS_FIXED = False
-    # Fallback if specific imports fail (less type safety)
-    DataSlice, FlowBuilder, DataScope, VectorIndexDef, VectorSimilarityMetric = (
-        Any,
-        Any,
-        Any,
-        Any,
-        Any,
+# --- Attempt to import specific components if they are public submodules ---
+# These are often correct as CocoIndex needs to expose them for its own APIs
+try:
+    from cocoindex.functions import SentenceTransformerEmbed, SplitRecursively
+    from cocoindex.query import SimpleSemanticsQueryHandler
+    from cocoindex.sources import LocalFile
+
+    # Settings, DatabaseConnectionSpec, DataSlice, FlowBuilder, DataScope,
+    # VectorIndexDef, VectorSimilarityMetric will be accessed as cocoindex.TypeName
+    MODULE_IMPORTS_SUCCESSFUL = True
+except ImportError as e:
+    logger.error(
+        f"Failed to import specific CocoIndex components (query, functions, sources): {e}. "
+        "App may fall back to Any types or fail if these are critical.",
+        exc_info=True,
     )
-    SimpleSemanticsQueryHandler, SentenceTransformerEmbed, SplitRecursively = (
-        Any,
-        Any,
-        Any,
-    )
-    LocalFile, Settings, DatabaseConnectionSpec = Any, Any, Any
-    logger.warning(
-        "Could not import specific types from cocoindex submodules. Using Any."
-    )
-# ------------------------------------------------------
+    MODULE_IMPORTS_SUCCESSFUL = False
+    # Define fallbacks if necessary, though the app might not function
+    SimpleSemanticsQueryHandler = Any
+    SentenceTransformerEmbed, SplitRecursively = Any, Any
+    LocalFile = Any
+# --------------------------------------------------------------------------
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi import Query as FastAPIQuery
+from fastapi.middleware.cors import CORSMiddleware  # Import CORS
 from pydantic import BaseModel
 
-# --- Import your custom operation from the new module ---
-from my_ops import extract_extension_op_registered
-
-# --- Basic Logging Configuration ---
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
-# ------------------------------------
+from my_ops import extract_extension_op_registered  # Your custom ops module
 
 logger.info(f"--- Imported 'extract_extension_op_registered' from my_ops.py ---")
 
@@ -68,10 +55,10 @@ logger.info(f"--- Imported 'extract_extension_op_registered' from my_ops.py ---"
 _COCOINDEX_INITIALIZED = False
 _FLOW_DEFINED_AND_REGISTERED = False
 
-_FLOW_OBJECT: Optional[cocoindex.flow.Flow] = (
-    None  # Assuming cocoindex.flow.Flow is correct top-level type
+_FLOW_OBJECT: Optional[cocoindex.flow.Flow] = None  # Main type for a flow object
+_QUERY_HANDLER: Optional[SimpleSemanticsQueryHandler] = (
+    None  # Type from specific import
 )
-_QUERY_HANDLER: Optional[SimpleSemanticsQueryHandler] = None  # Use imported type
 
 _CODE_EMBEDDING_FLOW_NAME = "CodeEmbedding"
 
@@ -90,10 +77,22 @@ def initialize_cocoindex():
         logger.critical("COCOINDEX_DATABASE_URL environment variable not set!")
         raise ValueError("COCOINDEX_DATABASE_URL must be set.")
     try:
-        # Use imported Settings types if available
-        cocoindex.init(Settings(database=DatabaseConnectionSpec(url=db_url)))
+        # Use cocoindex.Settings and cocoindex.DatabaseConnectionSpec directly
+        init_settings = cocoindex.Settings(
+            database=cocoindex.DatabaseConnectionSpec(url=db_url)
+        )
+        cocoindex.init(init_settings)
         _COCOINDEX_INITIALIZED = True
         logger.info("--- CocoIndex library initialized successfully ---")
+    except AttributeError as ae:
+        logger.critical(
+            f"cocoindex.init() failed due to missing attributes "
+            f"(Settings/DatabaseConnectionSpec not on 'cocoindex' module?): {ae}",
+            exc_info=True,
+        )
+        raise RuntimeError(
+            f"Failed to initialize CocoIndex due to AttributeError: {ae}"
+        )
     except Exception as e:
         logger.critical(f"cocoindex.init() failed: {e}", exc_info=True)
         raise RuntimeError(f"Failed to initialize CocoIndex: {e}")
@@ -103,10 +102,12 @@ initialize_cocoindex()
 
 
 # --- 2. Define Other Operations ---
-def _code_to_embedding_logic_impl(text: DataSlice) -> DataSlice:  # Use imported type
-    # Use imported SentenceTransformerEmbed if available
+# Using cocoindex.DataSlice for type hints as suggested by docs for similar types
+def _code_to_embedding_logic_impl(text: cocoindex.DataSlice) -> cocoindex.DataSlice:
     return text.transform(
-        SentenceTransformerEmbed(model="sentence-transformers/all-MiniLM-L6-v2")
+        SentenceTransformerEmbed(  # This comes from the specific import
+            model="sentence-transformers/all-MiniLM-L6-v2"
+        )
     )
 
 
@@ -114,33 +115,32 @@ code_to_embedding_logic_op: Any = _code_to_embedding_logic_impl
 
 
 # --- 3. Define Flow Builder Function (WITHOUT decorator) ---
+# Using cocoindex.FlowBuilder and cocoindex.DataScope as per documentation
 def code_embedding_flow_builder_func(
-    flow_builder: FlowBuilder, data_scope: DataScope  # Use imported types
+    flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope
 ):
     logger.info(
         f"Defining flow logic structure for '{_CODE_EMBEDDING_FLOW_NAME}' (registration in lifespan)"
     )
-    # Use imported LocalFile if available
     data_scope["files"] = flow_builder.add_source(
-        LocalFile(
-            path="uiautomator2",
+        LocalFile(  # This comes from the specific import
+            path="uiautomator2",  # Make sure this path exists relative to execution
             included_patterns=["*.py"],
             excluded_patterns=[".*", "**/__pycache__/**", "**/tests/**"],
         )
     )
     code_embeddings_collector = data_scope.add_collector()
     with data_scope["files"].row() as file:
-        # --- FIX: Use .call() for custom registered operations ---
-        file["extension"] = file["filename"].call(extract_extension_op_registered)
-        # -------------------------------------------------------
-        # Use imported SplitRecursively if available
+        # Use .transform() for the custom operation handle from @cocoindex.op.function
+        file["extension"] = file["filename"].transform(extract_extension_op_registered)
         file["chunks"] = file["content"].transform(
-            SplitRecursively(),
+            SplitRecursively(),  # This comes from the specific import
             language=file["extension"],
             chunk_size=300,
             chunk_overlap=50,
         )
         with file["chunks"].row() as chunk:
+            # Use .call() for plain Python functions
             chunk["embedding"] = chunk["text"].call(code_to_embedding_logic_op)
             code_embeddings_collector.collect(
                 filename=file["filename"],
@@ -150,20 +150,20 @@ def code_embedding_flow_builder_func(
             )
     code_embeddings_collector.export(
         "code_embeddings",
-        cocoindex.storages.Postgres(),  # Assuming this path is correct
+        cocoindex.storages.Postgres(),  # Assuming cocoindex.storages.Postgres is correct
         primary_key_fields=["filename", "location"],
         vector_indexes=[
-            # Use imported VectorIndexDef and VectorSimilarityMetric if available
-            VectorIndexDef(
+            # Using cocoindex.VectorIndexDef and cocoindex.VectorSimilarityMetric as per documentation
+            cocoindex.VectorIndexDef(
                 field_name="embedding",
-                metric=VectorSimilarityMetric.COSINE_SIMILARITY,
+                metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
             )
         ],
     )
 
 
 # --- 4. Query Handler Setup (Lazy Initialization) ---
-def get_query_handler() -> SimpleSemanticsQueryHandler:  # Use imported type
+def get_query_handler() -> SimpleSemanticsQueryHandler:  # Type from specific import
     global _QUERY_HANDLER, _FLOW_OBJECT
     if _QUERY_HANDLER:
         return _QUERY_HANDLER
@@ -182,14 +182,36 @@ def get_query_handler() -> SimpleSemanticsQueryHandler:  # Use imported type
             f"Flow object '{_CODE_EMBEDDING_FLOW_NAME}' was not initialized correctly."
         )
 
+    flow_name_for_log = _CODE_EMBEDDING_FLOW_NAME
+    # Defensively check for 'name' attribute on the flow object
+    if (
+        hasattr(_FLOW_OBJECT, "name")
+        and isinstance(_FLOW_OBJECT.name, str)
+        and _FLOW_OBJECT.name
+    ):
+        flow_name_for_log = _FLOW_OBJECT.name
+    elif hasattr(_FLOW_OBJECT, "name") and callable(
+        _FLOW_OBJECT.name
+    ):  # If .name is a method
+        try:
+            name_val = _FLOW_OBJECT.name()
+            if isinstance(name_val, str) and name_val:
+                flow_name_for_log = name_val
+        except Exception:
+            logger.warning(
+                "Could not retrieve flow name by calling _FLOW_OBJECT.name()"
+            )
+
     logger.info(
-        f"Initializing Query Handler 'CodeSearch' using Flow '{_FLOW_OBJECT.name if hasattr(_FLOW_OBJECT, 'name') else _CODE_EMBEDDING_FLOW_NAME}'..."
+        f"Initializing Query Handler 'CodeSearch' using Flow '{flow_name_for_log}'..."
     )
 
-    def query_text_to_embedding(text: DataSlice) -> DataSlice:  # Use imported type
-        # Use imported SentenceTransformerEmbed if available
+    # Using cocoindex.DataSlice for type hints
+    def query_text_to_embedding(text: cocoindex.DataSlice) -> cocoindex.DataSlice:
         return text.transform(
-            SentenceTransformerEmbed(model="sentence-transformers/all-MiniLM-L6-v2")
+            SentenceTransformerEmbed(  # From specific import
+                model="sentence-transformers/all-MiniLM-L6-v2"
+            )
         )
 
     _QUERY_HANDLER = SimpleSemanticsQueryHandler(
@@ -197,99 +219,127 @@ def get_query_handler() -> SimpleSemanticsQueryHandler:  # Use imported type
         flow=_FLOW_OBJECT,
         target_name="code_embeddings",
         query_transform_flow=query_text_to_embedding,
-        # Use imported VectorSimilarityMetric if available
-        default_similarity_metric=VectorSimilarityMetric.COSINE_SIMILARITY,
+        # Using cocoindex.VectorSimilarityMetric as per documentation
+        default_similarity_metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
     )
     logger.info("Query handler 'CodeSearch' initialized successfully.")
     return _QUERY_HANDLER
 
 
 # --- 5. FastAPI Application Definition ---
+# This 'app' is for the RAG API server (RagChunking/main.py)
 app = FastAPI(
-    title="CocoIndex uiautomator2 Code Search API",
-    description="API to perform semantic search on the uiautomator2 codebase.",
+    title="RAG API Server for Code Search",
+    description="API to perform semantic search on a codebase.",
     version="0.1.0",
+    # lifespan context will be assigned after CORS middleware
 )
 
+# --- ADD CORS MIDDLEWARE ---
+# Define the origins that are allowed to make requests.
+# This should be the origin of your uiautodev frontend.
+origins = [
+    "http://localhost:20242",  # Default port for uiautodev if run locally
+    "http://127.0.0.1:20242",  # Common alternative for localhost
+    # Add other origins if your frontend might be served from elsewhere during development/testing
+]
 
-# Lifespan context manager
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
+# --------------------------
+
+
 @asynccontextmanager
-async def lifespan(
-    current_app: FastAPI,
-):  # Can ignore unused 'current_app' hint or use _
-    global _FLOW_OBJECT, _FLOW_DEFINED_AND_REGISTERED, _QUERY_HANDLER
+async def lifespan(current_app: FastAPI):  # current_app can be changed to _ if not used
+    global _FLOW_OBJECT, _FLOW_DEFINED_AND_REGISTERED, _QUERY_HANDLER  # Ensure _QUERY_HANDLER is global if modified
 
-    logger.info("--- FastAPI lifespan startup ---")
-    if not _COCOINDEX_INITIALIZED:
+    logger.info("--- RAG API FastAPI lifespan startup ---")
+    if not _COCOINDEX_INITIALIZED:  # Should be done by top-level call, but ensure
         initialize_cocoindex()
 
     if not _FLOW_DEFINED_AND_REGISTERED:
         logger.info(
-            f"Lifespan: Defining and registering flow '{_CODE_EMBEDDING_FLOW_NAME}'..."
+            f"RAG Lifespan: Defining and registering flow '{_CODE_EMBEDDING_FLOW_NAME}'..."
         )
         try:
+            # Assuming cocoindex.flow.add_flow_def exists as per docs
             flow_obj = cocoindex.flow.add_flow_def(
                 _CODE_EMBEDDING_FLOW_NAME, code_embedding_flow_builder_func
             )
             _FLOW_OBJECT = flow_obj
             _FLOW_DEFINED_AND_REGISTERED = True
             logger.info(
-                f"Lifespan: Flow '{_CODE_EMBEDDING_FLOW_NAME}' registered successfully."
+                f"RAG Lifespan: Flow '{_CODE_EMBEDDING_FLOW_NAME}' registered successfully."
             )
-        except KeyError:
+        except KeyError:  # If add_flow_def raises KeyError on duplicate
             logger.warning(
-                f"Lifespan: Flow '{_CODE_EMBEDDING_FLOW_NAME}' already existed. Retrieving."
+                f"RAG Lifespan: Flow '{_CODE_EMBEDDING_FLOW_NAME}' already existed. Retrieving."
             )
             try:
-                # Pyright doesn't see get_flow_by_name, but keep runtime check
                 if hasattr(cocoindex.flow, "get_flow_by_name"):
                     _FLOW_OBJECT = cocoindex.flow.get_flow_by_name(_CODE_EMBEDDING_FLOW_NAME)  # type: ignore
-                    _FLOW_DEFINED_AND_REGISTERED = True
+                    _FLOW_DEFINED_AND_REGISTERED = True  # Mark as handled
                 else:
                     raise RuntimeError(
                         "Flow already exists but get_flow_by_name unavailable."
                     )
-            except Exception as e:
-                logger.critical(f"Lifespan flow retrieval failed: {e}", exc_info=True)
+            except Exception as e_retrieve:
+                logger.critical(
+                    f"RAG Lifespan flow retrieval failed: {e_retrieve}", exc_info=True
+                )
                 raise
-        except Exception as e:
-            logger.critical(f"Lifespan flow definition failed: {e}", exc_info=True)
+        except Exception as e_define:
+            logger.critical(
+                f"RAG Lifespan flow definition failed: {e_define}", exc_info=True
+            )
             raise
     else:
         logger.info(
-            f"Lifespan: Flow '{_CODE_EMBEDDING_FLOW_NAME}' assumed already registered."
+            f"RAG Lifespan: Flow '{_CODE_EMBEDDING_FLOW_NAME}' assumed already registered."
         )
-        if _FLOW_OBJECT is None:
+        if (
+            _FLOW_OBJECT is None
+        ):  # If flag was true but object is None (e.g. Uvicorn worker weirdness)
             logger.warning(
-                "Lifespan: Flow flag true but object is None. Attempting retrieval."
+                "RAG Lifespan: Flow flag true but object is None. Attempting retrieval."
             )
             try:
                 if hasattr(cocoindex.flow, "get_flow_by_name"):
                     _FLOW_OBJECT = cocoindex.flow.get_flow_by_name(_CODE_EMBEDDING_FLOW_NAME)  # type: ignore
-                if _FLOW_OBJECT is None:
+                if _FLOW_OBJECT is None:  # After attempt
                     raise RuntimeError(
                         "Flow flag true, object None, retrieval failed/unavailable."
                     )
-            except Exception as e:
+            except Exception as e_retrieve_flagged:
                 logger.critical(
-                    f"Lifespan flow retrieval (flag true) failed: {e}", exc_info=True
+                    f"RAG Lifespan flow retrieval (flag true) failed: {e_retrieve_flagged}",
+                    exc_info=True,
                 )
                 raise
 
-    logger.info("Lifespan: Initializing query handler...")
+    logger.info("RAG Lifespan: Initializing query handler...")
     try:
-        get_query_handler()
-        logger.info("Lifespan: Query Handler initialization complete.")
-    except Exception as e:
+        get_query_handler()  # This will initialize _QUERY_HANDLER
+        logger.info("RAG Lifespan: Query Handler initialization complete.")
+    except Exception as e_qh_init:
         logger.critical(
-            f"Lifespan Query Handler initialization failed: {e}", exc_info=True
+            f"RAG Lifespan Query Handler initialization failed: {e_qh_init}",
+            exc_info=True,
         )
+        # Depending on requirements, you might want to raise here to stop startup if handler is critical
+        # raise
 
-    logger.info("--- FastAPI lifespan startup complete. Server ready. ---")
+    logger.info("--- RAG API FastAPI lifespan startup complete. Server ready. ---")
     yield
-    logger.info("--- FastAPI lifespan shutdown. ---")
+    logger.info("--- RAG API FastAPI lifespan shutdown. ---")
 
 
+# Assign the lifespan to the app *after* defining it and the app instance
 app.router.lifespan_context = lifespan
 
 
@@ -325,38 +375,44 @@ async def api_search_codebase(
             status_code=503, detail=f"Search service not ready: {str(e)}"
         )
 
-    if not query_handler:
-        raise HTTPException(status_code=503, detail="Search service is not ready.")
-
-    logger.info(f"Received search request: query='{query}', top_k={top_k}")
-
-    try:
-        # Log the type, not a potentially non-existent '.name'
-        logger.info(
-            f"Performing search using handler type '{type(query_handler).__name__}'..."
+    if not query_handler:  # Should be caught by the exception above, but as a safeguard
+        raise HTTPException(
+            status_code=503, detail="Search service is not ready (handler is None)."
         )
 
-        # --- FIX: Use 'limit' instead of 'top_k' ---
-        search_result_items, _ = query_handler.search(query, limit=top_k)
-        # -------------------------------------------
+    logger.info(
+        f"RAG API: Received search request: query='{query}', top_k (limit will be)={top_k}"
+    )
 
-        logger.info(f"Raw result count from handler: {len(search_result_items)}")
+    try:
+        handler_type_name = type(query_handler).__name__
+        logger.info(
+            f"RAG API: Performing search using handler type '{handler_type_name}'..."
+        )
+        # Use 'limit' as the keyword argument for the search method
+        search_result_items, _ = query_handler.search(query, limit=top_k)
+
+        logger.info(
+            f"RAG API: Raw result count from handler: {len(search_result_items)}"
+        )
+        # Using DEBUG level for potentially verbose raw results
         logger.debug(
-            f"Raw results received from query_handler.search: {search_result_items}"
+            f"RAG API: Raw results received from query_handler.search: {search_result_items}"
         )
 
     except TypeError as e:
-        # Catch if 'limit' is also wrong or other arguments are missing/unexpected
+        # This will catch if 'limit' is still wrong or other arguments are missing/unexpected
         logger.error(
-            f"API Error: TypeError during search call (check parameters like 'limit'): {e}",
+            f"RAG API Error: TypeError during search call (check parameters like 'limit'): {e}",
             exc_info=True,
         )
         raise HTTPException(
             status_code=500, detail=f"Search handler parameter error: {str(e)}"
         )
     except AttributeError as e:
+        # This could be if query_handler itself is None or if 'search' method is genuinely missing
         logger.error(
-            f"API Error: Query handler missing 'search' method or other attribute: {e}",
+            f"RAG API Error: Query handler missing 'search' method or other attribute: {e}",
             exc_info=True,
         )
         raise HTTPException(
@@ -364,28 +420,33 @@ async def api_search_codebase(
             detail=f"Search handler configuration/usage error: {str(e)}",
         )
     except Exception as e:
-        logger.error(f"API Error during search execution: {e}", exc_info=True)
+        logger.error(f"RAG API Error during search execution: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Error performing search: {str(e)}"
         )
 
     processed_results = []
     if search_result_items:
-        logger.info(f"Processing {len(search_result_items)} search results.")
+        logger.info(f"RAG API: Processing {len(search_result_items)} search results.")
         for i, r in enumerate(search_result_items):
+            # Safe attribute access for score and data, providing defaults
+            score = getattr(r, "score", 0.0)
+            data_dict = getattr(r, "data", {})
             logger.debug(
-                f"Result {i+1} - Score: {getattr(r, 'score', 'N/A'):.4f}, Data: {getattr(r, 'data', {})}"
+                f"RAG API Result {i+1} - Score: {score:.4f}, Data: {data_dict}"
             )
             processed_results.append(
                 SearchResultItem(
-                    filename=r.data.get("filename"),
-                    location=str(r.data.get("location", "")),
-                    text=r.data.get("text"),
-                    score=getattr(r, "score", 0.0),
+                    filename=data_dict.get("filename"),
+                    location=str(
+                        data_dict.get("location", "")
+                    ),  # Ensure location is string
+                    text=data_dict.get("text"),
+                    score=score,
                 )
             )
     else:
-        logger.info("Search returned no results.")
+        logger.info("RAG API: Search returned no results.")
 
     return SearchResponse(
         query=query, results=processed_results, message="Search successful"
@@ -396,19 +457,28 @@ async def api_search_codebase(
 async def health_check():
     handler_ready = _QUERY_HANDLER is not None
     flow_ready = _FLOW_OBJECT is not None
-    handler_init_success = False
+    handler_init_success = False  # Default to false
+
     if handler_ready:
         try:
-            # Check a known method/attribute exists instead of '.name'
+            # Check for a known method rather than a potentially non-existent '.name'
             handler_init_success = hasattr(_QUERY_HANDLER, "search")
         except Exception:
+            # In case hasattr itself fails on a malformed _QUERY_HANDLER or proxy
             handler_init_success = False
-    status = "degraded"
+
+    # Log the values being checked for health status
+    logger.info(
+        f"RAG API Health Check Details: cocoindex_initialized={_COCOINDEX_INITIALIZED}, "
+        f"flow_ready={flow_ready}, handler_init_success={handler_init_success}"
+    )
+
+    current_status = "degraded"
     if _COCOINDEX_INITIALIZED and flow_ready and handler_init_success:
-        status = "ok"
-    logger.debug(f"Health check status: {status}")
+        current_status = "ok"
+
     return {
-        "status": status,
+        "status": current_status,
         "cocoindex_initialized": _COCOINDEX_INITIALIZED,
         "flow_object_available": flow_ready,
         "query_handler_ready": handler_init_success,
@@ -418,6 +488,8 @@ async def health_check():
 # --- 6. CocoIndex CLI Integration & API Server Runner ---
 @cocoindex.main_fn()
 async def _cocoindex_cli_entrypoint():
+    # This function's body is mainly for keeping 'cocoindex server' (CocoInsight) alive.
+    # Other CLI commands are handled by CocoIndex before this body is typically run.
     is_cocoinsight_server_command = (
         len(sys.argv) > 1
         and sys.argv[1] == "cocoindex"
@@ -433,13 +505,13 @@ async def _cocoindex_cli_entrypoint():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "serve-api":
-        logger.info("Command: 'serve-api'. Starting FastAPI/Uvicorn server...")
+        logger.info("Command: 'serve-api'. Starting RAG API FastAPI/Uvicorn server...")
         uvicorn.run(
-            "main:app",
+            "main:app",  # Points to the 'app' FastAPI instance in this 'main.py' file
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8000")),
-            reload=False,  # Keep reload=False
-            log_level="info",
+            reload=False,  # IMPORTANT: Keep reload=False to prevent re-registration issues
+            log_level="info",  # Uvicorn's log level
         )
     elif len(sys.argv) > 1 and sys.argv[1] == "cocoindex":
         logger.info(
@@ -448,7 +520,11 @@ if __name__ == "__main__":
         asyncio.run(_cocoindex_cli_entrypoint())
     else:
         print(
-            "--- No specific command. Use 'serve-api' or 'cocoindex <subcommand>'. ---"
+            "--- No specific command for RAG API. Use 'serve-api' or 'cocoindex <subcommand>'. ---"
         )
-        # ... (usage examples unchanged) ...
-    logger.info(f"--- Script {__file__} __main__ block finished. ---")
+        print("Usage examples:")
+        print("  python main.py serve-api")
+        print("  python main.py cocoindex setup")
+        print("  python main.py cocoindex update")
+        print("  python main.py cocoindex ls")
+    logger.info(f"--- Script {__file__} (RAG API) __main__ block finished. ---")
