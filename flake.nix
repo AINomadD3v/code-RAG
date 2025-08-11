@@ -108,7 +108,7 @@
             echo "      python main.py cocoindex ls      # To list defined flows"
             echo ""
             echo "   3. Start the search API server for your LLM assistant:"
-            echo "      python main.py serve-api"
+            echo "      python main.py api"
             echo ""
             echo "   4. (Optional) Start CocoInsight UI server:"
             echo "      python main.py cocoindex server -ci"
